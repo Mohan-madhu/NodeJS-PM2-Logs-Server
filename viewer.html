@@ -370,7 +370,8 @@
       const MAX_RECONNECT_ATTEMPTS = 10;
       let reconnectTimeout = null;
       let clientHeartbeatTimeout = null;
-      let isIntentionalClose = false;
+      let connectionGeneration = 0; // Track which connection is current
+      let lastActivityTime = Date.now(); // Track last message from ANY connection
 
       function formatBytes(bytes) {
         if (!bytes || isNaN(bytes)) return "-";
@@ -608,11 +609,26 @@
 
       function connectWebSocket(processId) {
         if (!SECRET_KEY) return;
+        if (!processId) return;
 
-        // Clean up previous connection BEFORE creating new one
+        // Increment connection generation - this makes old handlers obsolete
+        connectionGeneration++;
+        const myGeneration = connectionGeneration;
+
+        // Cancel any pending reconnection
+        if (reconnectTimeout) {
+          clearTimeout(reconnectTimeout);
+          reconnectTimeout = null;
+        }
+        reconnectAttempts = 0;
+
+        // Clean up previous connection
         if (ws) {
-          isIntentionalClose = true;
-          ws.close();
+          try {
+            ws.close();
+          } catch (e) {
+            // Ignore errors when closing
+          }
           ws = null;
         }
 
@@ -620,14 +636,6 @@
         if (clientHeartbeatTimeout) {
           clearInterval(clientHeartbeatTimeout);
           clientHeartbeatTimeout = null;
-        }
-
-        if (!processId) return;
-
-        // Reset reconnect attempts for new connection
-        if (reconnectTimeout) {
-          clearTimeout(reconnectTimeout);
-          reconnectTimeout = null;
         }
 
         const proto = window.location.protocol === "https:" ? "wss" : "ws";
@@ -649,32 +657,41 @@
         setConnectionStatus("connecting");
         appendMetaLine(`Connecting to process #${processId}...`);
 
-        isIntentionalClose = false;
         ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
-          reconnectAttempts = 0; // Reset on successful connection
+          // Check if this connection is still current
+          if (myGeneration !== connectionGeneration) return;
+
+          reconnectAttempts = 0;
           setConnectionStatus("connected");
           appendMetaLine("WebSocket connected.");
           
-          // Client-side keepalive: if no messages for 45 seconds, close and reconnect
-          // (server sends stats every 5 seconds + pings every 15 seconds)
+          lastActivityTime = Date.now();
+          
+          // Client-side keepalive: if no messages for 45 seconds, reconnect
           if (clientHeartbeatTimeout) {
             clearInterval(clientHeartbeatTimeout);
           }
           clientHeartbeatTimeout = setInterval(() => {
+            // Check if this connection is still current
+            if (myGeneration !== connectionGeneration) {
+              clearInterval(clientHeartbeatTimeout);
+              return;
+            }
+
             const timeSinceLastActivity = Date.now() - lastActivityTime;
             if (timeSinceLastActivity > 45000) {
               appendMetaLine("No response from server. Reconnecting...");
-              isIntentionalClose = false; // Allow auto-reconnect on timeout
               ws.close();
             }
           }, 10000);
         };
 
-        let lastActivityTime = Date.now();
-
         ws.onmessage = (event) => {
+          // Check if this connection is still current
+          if (myGeneration !== connectionGeneration) return;
+
           lastActivityTime = Date.now();
           
           if (pausedCheckbox.checked) return;
@@ -706,36 +723,37 @@
         };
 
         ws.onclose = () => {
+          // Check if this connection is still current
+          if (myGeneration !== connectionGeneration) return;
+
           if (clientHeartbeatTimeout) {
             clearInterval(clientHeartbeatTimeout);
             clientHeartbeatTimeout = null;
           }
           setConnectionStatus("disconnected");
+          appendMetaLine("WebSocket disconnected.");
           
-          // Only log and reconnect if this wasn't an intentional close
-          if (!isIntentionalClose) {
-            appendMetaLine("WebSocket disconnected.");
-            
-            // Only reconnect if we haven't exceeded max attempts
-            if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-              reconnectAttempts++;
-              const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 30000);
-              appendMetaLine(`Auto-reconnecting in ${Math.round(delay / 1000)}s (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
-              reconnectTimeout = setTimeout(() => {
+          // Only auto-reconnect if we haven't exceeded max attempts
+          if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+            reconnectAttempts++;
+            const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 30000);
+            appendMetaLine(`Auto-reconnecting in ${Math.round(delay / 1000)}s (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
+            reconnectTimeout = setTimeout(() => {
+              // Check if we should still reconnect (generation may have changed)
+              if (myGeneration === connectionGeneration) {
                 connectWebSocket(processId);
-              }, delay);
-            } else {
-              appendMetaLine("Max reconnection attempts reached. Please refresh the page.");
-            }
+              }
+            }, delay);
           } else {
-            isIntentionalClose = false; // Reset flag for next intentional close
+            appendMetaLine("Max reconnection attempts reached. Please refresh the page.");
           }
         };
 
         ws.onerror = (err) => {
-          if (!isIntentionalClose) {
-            appendMetaLine("WebSocket error: connection failed.");
-          }
+          // Check if this connection is still current
+          if (myGeneration !== connectionGeneration) return;
+
+          appendMetaLine("WebSocket error: connection failed.");
         };
       }
 
@@ -794,15 +812,7 @@
 
       processSelect.addEventListener("change", () => {
         currentProcessId = String(processSelect.value);
-        
-        // Clean up any pending reconnection attempts
-        if (reconnectTimeout) {
-          clearTimeout(reconnectTimeout);
-          reconnectTimeout = null;
-        }
-        reconnectAttempts = 0; // Reset reconnect counter for new process
-        
-        // Connect to the newly selected process
+        // connectWebSocket handles all cleanup and connection management
         connectWebSocket(currentProcessId);
       });
 
