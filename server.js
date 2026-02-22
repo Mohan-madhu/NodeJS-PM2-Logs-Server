@@ -264,45 +264,81 @@ wss.on("connection", (ws, req) => {
     console.log(`🔌 WebSocket connected for PM2 id=${id} (${logInfo.name})`);
 
     // Initial meta info
-    ws.send(
-      JSON.stringify({
-        type: "meta",
-        process: {
-          id: logInfo.id,
-          name: logInfo.name,
-          status: logInfo.status,
-          cpu: logInfo.cpu,
-          memory: logInfo.memory,
-          uptime: logInfo.uptime,
-          out: logInfo.out,
-          err: logInfo.err,
-        },
-      })
-    );
+    try {
+      ws.send(
+        JSON.stringify({
+          type: "meta",
+          process: {
+            id: logInfo.id,
+            name: logInfo.name,
+            status: logInfo.status,
+            cpu: logInfo.cpu,
+            memory: logInfo.memory,
+            uptime: logInfo.uptime,
+            out: logInfo.out,
+            err: logInfo.err,
+          },
+        })
+      );
+    } catch (e) {
+      console.error("Error sending initial meta:", e.message);
+    }
 
     // Tail stdout (last 200 lines then follow)
     const tailOut = spawn("tail", ["-n", "200", "-F", logInfo.out]);
 
-    tailOut.stdout.on("data", (data) => {
+    tailOut.on("error", (err) => {
+      console.error(`Tail error for ${logInfo.out}:`, err.message);
       ws.send(
         JSON.stringify({
-          type: "log",
-          stream: "out",
-          data: data.toString(),
-          timestamp: Date.now(),
+          type: "error",
+          message: `Failed to read log file: ${err.message}`,
         })
       );
+      ws.close();
+    });
+
+    tailOut.stdout.on("data", (data) => {
+      try {
+        if (ws.readyState === 1) { // 1 = OPEN
+          ws.send(
+            JSON.stringify({
+              type: "log",
+              stream: "out",
+              data: data.toString(),
+              timestamp: Date.now(),
+            })
+          );
+        }
+      } catch (e) {
+        console.error("Error sending log data:", e.message);
+      }
     });
 
     tailOut.stderr.on("data", (data) => {
-      ws.send(
-        JSON.stringify({
-          type: "log",
-          stream: "out-error",
-          data: data.toString(),
-          timestamp: Date.now(),
-        })
-      );
+      try {
+        if (ws.readyState === 1) {
+          ws.send(
+            JSON.stringify({
+              type: "log",
+              stream: "out-error",
+              data: data.toString(),
+              timestamp: Date.now(),
+            })
+          );
+        }
+      } catch (e) {
+        console.error("Error sending log error data:", e.message);
+      }
+    });
+
+    tailOut.on("exit", (code) => {
+      if (code !== 0) {
+        console.error(`Tail process exited with code ${code} for ${logInfo.out}`);
+        try {
+          ws.close(1011, `Tail process failed with code ${code}`);
+        } catch (_) {}
+      }
     });
 
     // Tail stderr if different
@@ -310,32 +346,59 @@ wss.on("connection", (ws, req) => {
     if (logInfo.err && logInfo.err !== logInfo.out) {
       tailErr = spawn("tail", ["-n", "200", "-F", logInfo.err]);
 
+      tailErr.on("error", (err) => {
+        console.error(`Tail error for ${logInfo.err}:`, err.message);
+      });
+
       tailErr.stdout.on("data", (data) => {
-        ws.send(
-          JSON.stringify({
-            type: "log",
-            stream: "err",
-            data: data.toString(),
-            timestamp: Date.now(),
-          })
-        );
+        try {
+          if (ws.readyState === 1) {
+            ws.send(
+              JSON.stringify({
+                type: "log",
+                stream: "err",
+                data: data.toString(),
+                timestamp: Date.now(),
+              })
+            );
+          }
+        } catch (e) {
+          console.error("Error sending err log data:", e.message);
+        }
       });
 
       tailErr.stderr.on("data", (data) => {
-        ws.send(
-          JSON.stringify({
-            type: "log",
-            stream: "err-error",
-            data: data.toString(),
-            timestamp: Date.now(),
-          })
-        );
+        try {
+          if (ws.readyState === 1) {
+            ws.send(
+              JSON.stringify({
+                type: "log",
+                stream: "err-error",
+                data: data.toString(),
+                timestamp: Date.now(),
+              })
+            );
+          }
+        } catch (e) {
+          console.error("Error sending err log error data:", e.message);
+        }
+      });
+
+      tailErr.on("exit", (code) => {
+        if (code !== 0) {
+          console.error(`Tail process exited with code ${code} for ${logInfo.err}`);
+          try {
+            ws.close(1011, `Tail process failed with code ${code}`);
+          } catch (_) {}
+        }
       });
     }
 
     // Periodic CPU/RAM stats
     const statsInterval = setInterval(() => {
       try {
+        if (ws.readyState !== 1) return; // Only send if connection is open
+        
         const updated = getLogInfo(id);
         if (!updated) return;
 
@@ -350,7 +413,7 @@ wss.on("connection", (ws, req) => {
           })
         );
       } catch (err) {
-        // ignore transient errors
+        console.error("Error sending stats:", err.message);
       }
     }, 5000);
 

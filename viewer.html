@@ -614,6 +614,13 @@
 
         if (!processId) return;
 
+        // Reset reconnect attempts for new connection
+        if (reconnectTimeout) {
+          clearTimeout(reconnectTimeout);
+          reconnectTimeout = null;
+        }
+        // Don't reset reconnectAttempts here - it's used to track failed attempts
+
         const proto = window.location.protocol === "https:" ? "wss" : "ws";
         const params = new URLSearchParams({
           id: processId,
@@ -636,6 +643,7 @@
         ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
+          reconnectAttempts = 0; // Reset on successful connection
           setConnectionStatus("connected");
           appendMetaLine("WebSocket connected.");
         };
@@ -673,6 +681,7 @@
           setConnectionStatus("disconnected");
           appendMetaLine("WebSocket disconnected.");
           
+          // Only reconnect if we're not manually closing and haven't exceeded max attempts
           if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
             reconnectAttempts++;
             const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 30000);
@@ -686,7 +695,7 @@
         };
 
         ws.onerror = (err) => {
-          appendMetaLine("WebSocket error.");
+          appendMetaLine("WebSocket error: connection failed.");
         };
       }
 
