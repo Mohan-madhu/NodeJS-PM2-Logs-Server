@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>PM2 Live Log Viewer</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+        background: #050810;
+        color: #f5f5f5;
+      }
+
+      header {
+        padding: 10px 15px;
+        background: #0b1120;
+        border-bottom: 1px solid #1f2937;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+      }
+
+      header h1 {
+        font-size: 18px;
+        margin: 0;
+        margin-right: 10px;
+      }
+
+      select,
+      input,
+      button {
+        background: #020617;
+        color: #e5e7eb;
+        border: 1px solid #374151;
+        border-radius: 4px;
+        padding: 4px 8px;
+        font-size: 13px;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      button:hover {
+        background: #111827;
+      }
+
+      .stats {
+        font-size: 12px;
+        color: #9ca3af;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 4px;
+      }
+
+      .stats span {
+        white-space: nowrap;
+      }
+
+      .main {
+        display: flex;
+        flex-direction: column;
+        height: calc(100vh - 70px);
+      }
+
+      .filters {
+        padding: 6px 10px;
+        background: #020617;
+        border-bottom: 1px solid #1f2937;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        font-size: 12px;
+      }
+
+      .filters label {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+
+      #logs {
+        flex: 1;
+        overflow-y: auto;
+        padding: 10px;
+        background: #000000;
+        color: #00ff00;
+        font-family: "JetBrains Mono", "Fira Code", monospace;
+        font-size: 12px;
+        white-space: pre-wrap;
+      }
+
+      .log-line {
+        margin: 0;
+      }
+
+      .log-out {
+        color: #00ff00;
+      }
+
+      .log-err {
+        color: #ff5c5c;
+      }
+
+      .log-meta {
+        color: #60a5fa;
+      }
+
+      .badge {
+        display: inline-block;
+        padding: 1px 5px;
+        border-radius: 3px;
+        font-size: 10px;
+        margin-right: 4px;
+      }
+
+      .badge-out {
+        background: #064e3b;
+        color: #a7f3d0;
+      }
+
+      .badge-err {
+        background: #7f1d1d;
+        color: #fecaca;
+      }
+
+      footer {
+        font-size: 11px;
+        padding: 4px 10px;
+        color: #6b7280;
+        background: #020617;
+        border-top: 1px solid #1f2937;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>PM2 Live Log Viewer</h1>
+
+      <select id="processSelect"></select>
+
+      <div class="stats" id="stats">
+        <span id="stat-name"></span>
+        <span id="stat-status"></span>
+        <span id="stat-cpu"></span>
+        <span id="stat-mem"></span>
+        <span id="stat-uptime"></span>
+      </div>
+    </header>
+
+    <div class="main">
+      <div class="filters">
+        <label>
+          Filter:
+          <input
+            type="text"
+            id="filterInput"
+            placeholder="Text filter (client-side)"
+          />
+        </label>
+
+        <label>
+          <input type="checkbox" id="errorsOnly" />
+          Errors only
+        </label>
+
+        <label>
+          <input type="checkbox" id="autoScroll" checked />
+          Auto-scroll
+        </label>
+
+        <label>
+          <input type="checkbox" id="paused" />
+          Pause stream
+        </label>
+
+        <button id="clearBtn">Clear</button>
+      </div>
+
+      <div id="logs"></div>
+    </div>
+
+    <footer>
+      WebSocket PM2 log stream – filter, pause, and monitor CPU/RAM in real
+      time.
+    </footer>
+
+    <script>
+      // ---- URL / key parsing ----
+      const url = new URL(window.location.href);
+      const SECRET_KEY = url.searchParams.get("key");
+
+      if (!SECRET_KEY) {
+        alert(
+          "Missing ?key=SECRET_KEY in URL. Add it to access the log viewer."
+        );
+      }
+
+      // Detect /logs/:id from pathname (e.g. /logs/24)
+      let initialProcessId = null;
+      const pathMatch = window.location.pathname.match(/^\/logs\/(\d+)/);
+      if (pathMatch && pathMatch[1]) {
+        initialProcessId = pathMatch[1];
+      } else {
+        // fallback: ?id=24
+        const idFromQuery = url.searchParams.get("id");
+        if (idFromQuery) {
+          initialProcessId = idFromQuery;
+        }
+      }
+
+      const processSelect = document.getElementById("processSelect");
+      const logsDiv = document.getElementById("logs");
+
+      const filterInput = document.getElementById("filterInput");
+      const errorsOnly = document.getElementById("errorsOnly");
+      const autoScroll = document.getElementById("autoScroll");
+      const pausedCheckbox = document.getElementById("paused");
+      const clearBtn = document.getElementById("clearBtn");
+
+      const statName = document.getElementById("stat-name");
+      const statStatus = document.getElementById("stat-status");
+      const statCpu = document.getElementById("stat-cpu");
+      const statMem = document.getElementById("stat-mem");
+      const statUptime = document.getElementById("stat-uptime");
+
+      let ws = null;
+      let currentProcessId = null;
+
+      function formatBytes(bytes) {
+        if (!bytes || isNaN(bytes)) return "-";
+        const sizes = ["B", "KB", "MB", "GB"];
+        const i = Math.floor(Math.log(bytes) / Math.log(1024));
+        return (bytes / Math.pow(1024, i)).toFixed(1) + " " + sizes[i];
+      }
+
+      function formatUptime(ms) {
+        if (!ms || isNaN(ms)) return "-";
+        const s = Math.floor(ms / 1000);
+        const h = Math.floor(s / 3600);
+        const m = Math.floor((s % 3600) / 60);
+        const sec = s % 60;
+        return `${h}h ${m}m ${sec}s`;
+      }
+
+      function applyFilter(line, stream) {
+        const textFilter = filterInput.value.toLowerCase();
+        const onlyErrors = errorsOnly.checked;
+
+        if (onlyErrors && stream !== "err" && !line.toLowerCase().includes("error")) {
+          return false;
+        }
+        if (textFilter && !line.toLowerCase().includes(textFilter)) {
+          return false;
+        }
+        return true;
+      }
+
+      function appendLogLine(line, stream) {
+        if (!applyFilter(line, stream)) return;
+
+        const p = document.createElement("div");
+        p.classList.add("log-line");
+
+        if (stream === "err" || stream === "err-error") {
+          p.classList.add("log-err");
+        } else {
+          p.classList.add("log-out");
+        }
+
+        const badge = document.createElement("span");
+        badge.classList.add("badge");
+        if (stream === "err" || stream === "err-error") {
+          badge.classList.add("badge-err");
+          badge.textContent = "ERR";
+        } else {
+          badge.classList.add("badge-out");
+          badge.textContent = "OUT";
+        }
+
+        const textNode = document.createTextNode(" " + line);
+
+        p.appendChild(badge);
+        p.appendChild(textNode);
+        logsDiv.appendChild(p);
+
+        if (autoScroll.checked) {
+          logsDiv.scrollTop = logsDiv.scrollHeight;
+        }
+      }
+
+      function appendMetaLine(text) {
+        const p = document.createElement("div");
+        p.classList.add("log-line", "log-meta");
+        p.textContent = `>>> ${text}`;
+        logsDiv.appendChild(p);
+        if (autoScroll.checked) {
+          logsDiv.scrollTop = logsDiv.scrollHeight;
+        }
+      }
+
+      function updateStats(metaOrStats) {
+        if (metaOrStats.process) {
+          const p = metaOrStats.process;
+          statName.textContent = `[#${p.id}] ${p.name || ""}`;
+          statStatus.textContent = `Status: ${p.status || "-"}`;
+          statCpu.textContent = `CPU: ${p.cpu ?? "-"}%`;
+          statMem.textContent = `RAM: ${formatBytes(p.memory)}`;
+          statUptime.textContent = `Uptime: ${formatUptime(p.uptime)}`;
+        } else {
+          statStatus.textContent = `Status: ${metaOrStats.status || "-"}`;
+          statCpu.textContent = `CPU: ${metaOrStats.cpu ?? "-"}%`;
+          statMem.textContent = `RAM: ${formatBytes(metaOrStats.memory)}`;
+          statUptime.textContent = `Uptime: ${formatUptime(metaOrStats.uptime)}`;
+        }
+      }
+
+      function connectWebSocket(processId) {
+        if (!SECRET_KEY) return;
+
+        if (ws) {
+          ws.close();
+          ws = null;
+        }
+
+        if (!processId) return;
+
+        const proto = window.location.protocol === "https:" ? "wss" : "ws";
+        const wsUrl = `${proto}://${window.location.host}/ws?id=${processId}&key=${encodeURIComponent(
+          SECRET_KEY
+        )}`;
+
+        logsDiv.innerHTML = "";
+        appendMetaLine(`Connecting to process #${processId} ...`);
+
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+          appendMetaLine("WebSocket connected.");
+        };
+
+        ws.onmessage = (event) => {
+          if (pausedCheckbox.checked) return;
+
+          let payload;
+          try {
+            payload = JSON.parse(event.data);
+          } catch (e) {
+            appendLogLine(event.data, "out");
+            return;
+          }
+
+          if (payload.type === "log") {
+            const lines = payload.data.split("\n");
+            for (const line of lines) {
+              if (line.trim().length === 0) continue;
+              appendLogLine(line, payload.stream || "out");
+            }
+          } else if (payload.type === "meta") {
+            updateStats(payload);
+            appendMetaLine(
+              `Connected to [#${payload.process.id}] ${payload.process.name}`
+            );
+          } else if (payload.type === "stats") {
+            updateStats(payload);
+          } else if (payload.type === "error") {
+            appendMetaLine("Error: " + payload.message);
+          }
+        };
+
+        ws.onclose = () => {
+          appendMetaLine("WebSocket disconnected.");
+        };
+
+        ws.onerror = () => {
+          appendMetaLine("WebSocket error.");
+        };
+      }
+
+      async function loadProcesses() {
+        if (!SECRET_KEY) return;
+
+        try {
+          const res = await fetch(`/api/processes?key=${encodeURIComponent(
+            SECRET_KEY
+          )}`);
+          const data = await res.json();
+          if (!data.success) throw new Error("API error");
+
+          processSelect.innerHTML = "";
+
+          const processes = data.processes.sort((a, b) => a.id - b.id);
+
+          processes.forEach((p) => {
+            const opt = document.createElement("option");
+            opt.value = p.id;
+            opt.textContent = `[#${p.id}] ${p.name} (${p.status})`;
+            processSelect.appendChild(opt);
+          });
+
+          if (processes.length === 0) {
+            appendMetaLine("No PM2 processes found.");
+            return;
+          }
+
+          // Decide which process to connect to first:
+          // 1) If /logs/:id or ?id= is present and exists, use that
+          // 2) Otherwise use first in list
+          let targetId = null;
+
+          if (initialProcessId) {
+            const exists = processes.find(
+              (p) => String(p.id) === String(initialProcessId)
+            );
+            if (exists) {
+              targetId = exists.id;
+            }
+          }
+
+          if (!targetId) {
+            targetId = processes[0].id;
+          }
+
+          currentProcessId = targetId;
+          processSelect.value = String(targetId);
+          connectWebSocket(currentProcessId);
+        } catch (e) {
+          console.error(e);
+          appendMetaLine("Failed to load PM2 processes.");
+        }
+      }
+
+      // ---- Events ----
+      processSelect.addEventListener("change", () => {
+        currentProcessId = processSelect.value;
+        connectWebSocket(currentProcessId);
+      });
+
+      clearBtn.addEventListener("click", () => {
+        logsDiv.innerHTML = "";
+      });
+
+      // Filter + errorsOnly are applied only to new incoming lines
+      filterInput.addEventListener("input", () => {});
+      errorsOnly.addEventListener("change", () => {});
+
+      // ---- Init ----
+      loadProcesses();
+    </script>
+  </body>
+</html>
