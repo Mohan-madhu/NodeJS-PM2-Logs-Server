@@ -142,6 +142,79 @@ app.get("/api/logs/export/:id", requireKey, (req, res) => {
   }
 });
 
+// ---------- PM2 Process Control Endpoints ----------
+
+// Start a process
+app.post("/api/processes/:id/start", requireKey, (req, res) => {
+  try {
+    const pm2Id = req.params.id;
+    const proc = getProcessById(pm2Id);
+    
+    if (!proc) {
+      return res.status(404).json({ success: false, error: "Process not found" });
+    }
+
+    const name = proc.pm2_env?.name || proc.name || `pm2-${pm2Id}`;
+    execSync(`pm2 start ${name}`);
+    
+    res.json({ success: true, message: `Process ${name} started` });
+  } catch (err) {
+    console.error("Error starting process:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Stop a process
+app.post("/api/processes/:id/stop", requireKey, (req, res) => {
+  try {
+    const pm2Id = req.params.id;
+    const proc = getProcessById(pm2Id);
+    
+    if (!proc) {
+      return res.status(404).json({ success: false, error: "Process not found" });
+    }
+
+    const name = proc.pm2_env?.name || proc.name || `pm2-${pm2Id}`;
+    execSync(`pm2 stop ${name}`);
+    
+    res.json({ success: true, message: `Process ${name} stopped` });
+  } catch (err) {
+    console.error("Error stopping process:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Restart a process
+app.post("/api/processes/:id/restart", requireKey, (req, res) => {
+  try {
+    const pm2Id = req.params.id;
+    const proc = getProcessById(pm2Id);
+    
+    if (!proc) {
+      return res.status(404).json({ success: false, error: "Process not found" });
+    }
+
+    const name = proc.pm2_env?.name || proc.name || `pm2-${pm2Id}`;
+    execSync(`pm2 restart ${name}`);
+    
+    res.json({ success: true, message: `Process ${name} restarted` });
+  } catch (err) {
+    console.error("Error restarting process:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Save PM2 state
+app.post("/api/pm2/save", requireKey, (req, res) => {
+  try {
+    execSync("pm2 save");
+    res.json({ success: true, message: "PM2 state saved successfully" });
+  } catch (err) {
+    console.error("Error saving PM2 state:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ---------- WebSocket for logs ----------
 // ws://host/ws?id=PM2_ID&key=SECRET_KEY&restrictedId=PM2_ID (optional)
 wss.on("connection", (ws, req) => {

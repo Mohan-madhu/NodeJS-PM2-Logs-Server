@@ -223,6 +223,14 @@
     <header>
       <h1>PM2 Live Log Viewer</h1>
       <select id="processSelect"></select>
+      
+      <div class="filters-group">
+        <button id="startBtn" title="Start process">▶ Start</button>
+        <button id="stopBtn" title="Stop process">⏹ Stop</button>
+        <button id="restartBtn" title="Restart process">🔄 Restart</button>
+        <button id="saveBtn" title="Save PM2 state">💾 Save</button>
+      </div>
+
       <div class="stats" id="stats">
         <span id="stat-name"></span>
         <span id="stat-status"></span>
@@ -340,6 +348,11 @@
       const downloadBtn = document.getElementById("downloadBtn");
       const resetFilterBtn = document.getElementById("resetFilterBtn");
       const filterInfo = document.getElementById("filterInfo");
+      
+      const startBtn = document.getElementById("startBtn");
+      const stopBtn = document.getElementById("stopBtn");
+      const restartBtn = document.getElementById("restartBtn");
+      const saveBtn = document.getElementById("saveBtn");
       const lineCountSpan = document.getElementById("lineCount");
       const statName = document.getElementById("stat-name");
       const statStatus = document.getElementById("stat-status");
@@ -765,6 +778,58 @@
         if (!currentProcessId) return;
         const params = new URLSearchParams({ key: SECRET_KEY });
         window.location.href = `/api/logs/export/${currentProcessId}?${params.toString()}`;
+      });
+
+      // PM2 Control Functions
+      async function controlProcess(action) {
+        if (!currentProcessId) {
+          alert("No process selected");
+          return;
+        }
+
+        const originalText = event.target.textContent;
+        event.target.disabled = true;
+        event.target.textContent = "...";
+
+        try {
+          const response = await fetch(`/api/processes/${currentProcessId}/${action}?key=${SECRET_KEY}`, {
+            method: "POST",
+          });
+          const data = await response.json();
+
+          if (data.success) {
+            alert(data.message || `Process ${action} successful`);
+          } else {
+            alert(`Error: ${data.error || "Unknown error"}`);
+          }
+        } catch (err) {
+          alert(`Error: ${err.message}`);
+        } finally {
+          event.target.disabled = false;
+          event.target.textContent = originalText;
+        }
+      }
+
+      startBtn.addEventListener("click", () => controlProcess("start"));
+      stopBtn.addEventListener("click", () => controlProcess("stop"));
+      restartBtn.addEventListener("click", () => controlProcess("restart"));
+      saveBtn.addEventListener("click", async () => {
+        saveBtn.disabled = true;
+        saveBtn.textContent = "...";
+        try {
+          const response = await fetch(`/api/pm2/save?key=${SECRET_KEY}`, { method: "POST" });
+          const data = await response.json();
+          if (data.success) {
+            alert("PM2 state saved successfully!");
+          } else {
+            alert(`Error: ${data.error}`);
+          }
+        } catch (err) {
+          alert(`Error: ${err.message}`);
+        } finally {
+          saveBtn.disabled = false;
+          saveBtn.textContent = "💾 Save";
+        }
       });
 
       resetFilterBtn.addEventListener("click", () => {
