@@ -7,6 +7,7 @@ const { execSync, spawn } = require("child_process");
 const WebSocket = require("ws");
 const http = require("http");
 const { URL } = require("url");
+const fs = require("fs");
 
 const app = express();
 const server = http.createServer(app);
@@ -74,11 +75,15 @@ app.get("/logs/:id", requireKey, (req, res) => {
 });
 
 // API to get PM2 process list (used by the master page)
+// If called from /logs/:id, only return that specific process
 app.get("/api/processes", requireKey, (req, res) => {
   try {
     const list = getPm2List();
+    
+    // Check if restricted by URL
+    const restrictedId = req.query.restrictedId;
 
-    const mapped = list.map((p) => {
+    let mapped = list.map((p) => {
       const env = p.pm2_env || {};
       const monit = p.monit || {};
 
@@ -94,6 +99,14 @@ app.get("/api/processes", requireKey, (req, res) => {
       };
     });
 
+    // If restricted, only return that process
+    if (restrictedId) {
+      mapped = mapped.filter((p) => String(p.id) === String(restrictedId));
+      if (mapped.length === 0) {
+        return res.status(404).json({ success: false, error: "Process not found" });
+      }
+    }
+
     res.json({ success: true, processes: mapped });
   } catch (err) {
     console.error("Error getting pm2 list:", err);
@@ -101,13 +114,42 @@ app.get("/api/processes", requireKey, (req, res) => {
   }
 });
 
+// Export logs endpoint
+app.get("/api/logs/export/:id", requireKey, (req, res) => {
+  try {
+    const pm2Id = req.params.id;
+    const logInfo = getLogInfo(pm2Id);
+
+    if (!logInfo || !logInfo.out) {
+      return res.status(404).json({ error: "Process not found" });
+    }
+
+    // Read the log file
+    if (!fs.existsSync(logInfo.out)) {
+      return res.status(404).json({ error: "Log file not found" });
+    }
+
+    const logContent = fs.readFileSync(logInfo.out, "utf-8");
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const filename = `${logInfo.name}-${pm2Id}-${timestamp}.log`;
+
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.setHeader("Content-Type", "text/plain");
+    res.send(logContent);
+  } catch (err) {
+    console.error("Error exporting logs:", err);
+    res.status(500).json({ error: "Failed to export logs" });
+  }
+});
+
 // ---------- WebSocket for logs ----------
-// ws://host/ws?id=PM2_ID&key=SECRET_KEY
+// ws://host/ws?id=PM2_ID&key=SECRET_KEY&restrictedId=PM2_ID (optional)
 wss.on("connection", (ws, req) => {
   try {
     const url = new URL(req.url, "http://localhost");
     const id = url.searchParams.get("id");
     const key = url.searchParams.get("key");
+    const restrictedId = url.searchParams.get("restrictedId");
 
     if (!key || key !== SECRET_KEY) {
       ws.send(JSON.stringify({ type: "error", message: "Unauthorized" }));
@@ -117,6 +159,18 @@ wss.on("connection", (ws, req) => {
 
     if (!id) {
       ws.send(JSON.stringify({ type: "error", message: "Missing id" }));
+      ws.close();
+      return;
+    }
+
+    // If restricted to a specific process, enforce it
+    if (restrictedId && String(id) !== String(restrictedId)) {
+      ws.send(
+        JSON.stringify({
+          type: "error",
+          message: "Access denied: restricted to a different process",
+        })
+      );
       ws.close();
       return;
     }

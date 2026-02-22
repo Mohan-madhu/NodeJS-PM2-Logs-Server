@@ -4,6 +4,10 @@
     <meta charset="utf-8" />
     <title>PM2 Live Log Viewer</title>
     <style>
+      * {
+        box-sizing: border-box;
+      }
+
       body {
         margin: 0;
         padding: 0;
@@ -40,12 +44,23 @@
         font-size: 13px;
       }
 
-      button {
-        cursor: pointer;
+      select:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
       }
 
-      button:hover {
+      button {
+        cursor: pointer;
+        white-space: nowrap;
+      }
+
+      button:hover:not(:disabled) {
         background: #111827;
+      }
+
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
       }
 
       .stats {
@@ -61,10 +76,31 @@
         white-space: nowrap;
       }
 
+      .status-indicator {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-right: 4px;
+        vertical-align: middle;
+      }
+
+      .status-connected {
+        background: #10b981;
+      }
+
+      .status-disconnected {
+        background: #ef4444;
+      }
+
+      .status-connecting {
+        background: #f59e0b;
+      }
+
       .main {
         display: flex;
         flex-direction: column;
-        height: calc(100vh - 70px);
+        height: calc(100vh - 100px);
       }
 
       .filters {
@@ -78,10 +114,23 @@
         font-size: 12px;
       }
 
+      .filters-group {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+      }
+
       .filters label {
         display: flex;
         align-items: center;
         gap: 4px;
+      }
+
+      .filter-info {
+        font-size: 11px;
+        color: #9ca3af;
+        margin-left: 8px;
       }
 
       #logs {
@@ -93,10 +142,23 @@
         font-family: "JetBrains Mono", "Fira Code", monospace;
         font-size: 12px;
         white-space: pre-wrap;
+        word-wrap: break-word;
       }
 
       .log-line {
         margin: 0;
+        display: flex;
+        gap: 8px;
+      }
+
+      .log-timestamp {
+        color: #6b7280;
+        flex-shrink: 0;
+        font-size: 11px;
+      }
+
+      .log-content {
+        flex: 1;
       }
 
       .log-out {
@@ -111,12 +173,17 @@
         color: #60a5fa;
       }
 
+      .log-line.hidden {
+        display: none !important;
+      }
+
       .badge {
         display: inline-block;
         padding: 1px 5px;
         border-radius: 3px;
         font-size: 10px;
         margin-right: 4px;
+        flex-shrink: 0;
       }
 
       .badge-out {
@@ -135,63 +202,107 @@
         color: #6b7280;
         background: #020617;
         border-top: 1px solid #1f2937;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .footer-info {
+        display: flex;
+        gap: 16px;
+        align-items: center;
+      }
+
+      .keyboard-hint {
+        font-size: 10px;
+        color: #4b5563;
       }
     </style>
   </head>
   <body>
     <header>
       <h1>PM2 Live Log Viewer</h1>
-
       <select id="processSelect"></select>
-
       <div class="stats" id="stats">
         <span id="stat-name"></span>
         <span id="stat-status"></span>
         <span id="stat-cpu"></span>
         <span id="stat-mem"></span>
         <span id="stat-uptime"></span>
+        <span id="stat-connection">
+          <span class="status-indicator status-disconnected"></span>
+          Disconnected
+        </span>
       </div>
     </header>
 
     <div class="main">
       <div class="filters">
-        <label>
-          Filter:
-          <input
-            type="text"
-            id="filterInput"
-            placeholder="Text filter (client-side)"
-          />
-        </label>
+        <div class="filters-group">
+          <label>
+            Filter:
+            <input
+              type="text"
+              id="filterInput"
+              placeholder="Text filter (case-insensitive)"
+            />
+          </label>
 
-        <label>
-          <input type="checkbox" id="errorsOnly" />
-          Errors only
-        </label>
+          <label>
+            <input type="checkbox" id="errorsOnly" />
+            Errors only
+          </label>
 
-        <label>
-          <input type="checkbox" id="autoScroll" checked />
-          Auto-scroll
-        </label>
+          <label>
+            <input type="checkbox" id="warningsOnly" />
+            Warnings
+          </label>
 
-        <label>
-          <input type="checkbox" id="paused" />
-          Pause stream
-        </label>
+          <label>
+            <input type="checkbox" id="successOnly" />
+            Success
+          </label>
 
-        <button id="clearBtn">Clear</button>
+          <label>
+            <input type="checkbox" id="timestampsToggle" />
+            Timestamps
+          </label>
+
+          <button id="resetFilterBtn" title="Reset all filters">Reset</button>
+          <span class="filter-info" id="filterInfo"></span>
+        </div>
+
+        <div class="filters-group">
+          <label>
+            <input type="checkbox" id="autoScroll" checked />
+            Auto-scroll
+          </label>
+
+          <label>
+            <input type="checkbox" id="paused" />
+            Pause stream
+          </label>
+
+          <button id="clearBtn" title="Clear logs (Ctrl+L)">Clear</button>
+          <button id="copyBtn" title="Copy all visible logs">Copy</button>
+          <button id="downloadBtn" title="Download logs">Download</button>
+        </div>
       </div>
 
       <div id="logs"></div>
     </div>
 
     <footer>
-      WebSocket PM2 log stream – filter, pause, and monitor CPU/RAM in real
-      time.
+      <span
+        >Lines: <span id="lineCount">0</span> | Max: <span id="maxLines">5000</span></span
+      >
+      <div class="footer-info">
+        <span id="footerStatus">Ready</span>
+        <span class="keyboard-hint">Ctrl+L clear | Ctrl+K errors | Ctrl+J warnings | Ctrl+H success | Ctrl+R reset</span>
+      </div>
     </footer>
 
     <script>
-      // ---- URL / key parsing ----
       const url = new URL(window.location.href);
       const SECRET_KEY = url.searchParams.get("key");
 
@@ -201,13 +312,13 @@
         );
       }
 
-      // Detect /logs/:id from pathname (e.g. /logs/24)
       let initialProcessId = null;
+      let isRestrictedMode = false;
       const pathMatch = window.location.pathname.match(/^\/logs\/(\d+)/);
       if (pathMatch && pathMatch[1]) {
         initialProcessId = pathMatch[1];
+        isRestrictedMode = true;
       } else {
-        // fallback: ?id=24
         const idFromQuery = url.searchParams.get("id");
         if (idFromQuery) {
           initialProcessId = idFromQuery;
@@ -219,18 +330,32 @@
 
       const filterInput = document.getElementById("filterInput");
       const errorsOnly = document.getElementById("errorsOnly");
+      const warningsOnly = document.getElementById("warningsOnly");
+      const successOnly = document.getElementById("successOnly");
+      const timestampsToggle = document.getElementById("timestampsToggle");
       const autoScroll = document.getElementById("autoScroll");
       const pausedCheckbox = document.getElementById("paused");
       const clearBtn = document.getElementById("clearBtn");
-
+      const copyBtn = document.getElementById("copyBtn");
+      const downloadBtn = document.getElementById("downloadBtn");
+      const resetFilterBtn = document.getElementById("resetFilterBtn");
+      const filterInfo = document.getElementById("filterInfo");
+      const lineCountSpan = document.getElementById("lineCount");
       const statName = document.getElementById("stat-name");
       const statStatus = document.getElementById("stat-status");
       const statCpu = document.getElementById("stat-cpu");
       const statMem = document.getElementById("stat-mem");
       const statUptime = document.getElementById("stat-uptime");
+      const statConnection = document.getElementById("stat-connection");
+      const footerStatus = document.getElementById("footerStatus");
 
       let ws = null;
       let currentProcessId = null;
+      let lineCount = 0;
+      const MAX_LINES = 5000;
+      let reconnectAttempts = 0;
+      const MAX_RECONNECT_ATTEMPTS = 10;
+      let reconnectTimeout = null;
 
       function formatBytes(bytes) {
         if (!bytes || isNaN(bytes)) return "-";
@@ -248,20 +373,116 @@
         return `${h}h ${m}m ${sec}s`;
       }
 
+      function formatTime(timestamp) {
+        return new Date(timestamp).toLocaleTimeString();
+      }
+
+      function setConnectionStatus(status) {
+        const indicator = statConnection.querySelector(".status-indicator");
+        if (status === "connected") {
+          indicator.className = "status-indicator status-connected";
+          statConnection.textContent = "";
+          statConnection.appendChild(indicator);
+          statConnection.appendChild(document.createTextNode(" Connected"));
+          footerStatus.textContent = "Connected";
+          reconnectAttempts = 0;
+        } else if (status === "connecting") {
+          indicator.className = "status-indicator status-connecting";
+          statConnection.textContent = "";
+          statConnection.appendChild(indicator);
+          statConnection.appendChild(document.createTextNode(" Connecting..."));
+          footerStatus.textContent = "Connecting...";
+        } else {
+          indicator.className = "status-indicator status-disconnected";
+          statConnection.textContent = "";
+          statConnection.appendChild(indicator);
+          statConnection.appendChild(document.createTextNode(" Disconnected"));
+          footerStatus.textContent = "Disconnected";
+        }
+      }
+
+      function updateFilterInfo() {
+        const total = logsDiv.children.length;
+        const visible = Array.from(logsDiv.children).filter(
+          (el) => !el.classList.contains("hidden")
+        ).length;
+
+        if (total === 0) {
+          filterInfo.textContent = "";
+        } else if (visible === total) {
+          filterInfo.textContent = `${total} line${total !== 1 ? "s" : ""}`;
+        } else {
+          filterInfo.textContent = `${visible}/${total} visible`;
+        }
+      }
+
+      function reapplyFilters() {
+        const textFilter = filterInput.value.toLowerCase();
+        const onlyErrors = errorsOnly.checked;
+        const onlyWarnings = warningsOnly.checked;
+        const onlySuccess = successOnly.checked;
+
+        Array.from(logsDiv.children).forEach((lineEl) => {
+          const text = lineEl.textContent.toLowerCase();
+          let show = true;
+
+          if (onlyErrors && lineEl.classList.contains("log-err")) {
+            show = true;
+          } else if (onlyErrors) {
+            show = text.includes("error");
+          }
+
+          if (show && onlyWarnings && lineEl.classList.contains("log-err")) {
+            show = false;
+          } else if (show && onlyWarnings) {
+            show = text.includes("warn");
+          }
+
+          if (show && onlySuccess) {
+            show = text.match(/(success|✓|completed|done|ok\b)/i);
+          }
+
+          if (show && textFilter) {
+            show = text.includes(textFilter);
+          }
+
+          if (show) {
+            lineEl.classList.remove("hidden");
+          } else {
+            lineEl.classList.add("hidden");
+          }
+        });
+
+        updateFilterInfo();
+      }
+
       function applyFilter(line, stream) {
         const textFilter = filterInput.value.toLowerCase();
         const onlyErrors = errorsOnly.checked;
+        const onlyWarnings = warningsOnly.checked;
+        const onlySuccess = successOnly.checked;
+        const lineLower = line.toLowerCase();
 
-        if (onlyErrors && stream !== "err" && !line.toLowerCase().includes("error")) {
+        if (onlyErrors && stream !== "err" && !lineLower.includes("error")) {
           return false;
         }
-        if (textFilter && !line.toLowerCase().includes(textFilter)) {
+
+        if (onlyWarnings && stream !== "err" && !lineLower.includes("warn")) {
           return false;
         }
+
+        if (onlySuccess && !lineLower.match(/(success|✓|completed|done|ok\b)/i)) {
+          return false;
+        }
+
+        if (textFilter && !lineLower.includes(textFilter)) {
+          return false;
+        }
+
         return true;
       }
 
-      function appendLogLine(line, stream) {
+      function appendLogLine(line, stream, timestamp) {
         if (!applyFilter(line, stream)) return;
 
         const p = document.createElement("div");
@@ -271,6 +492,13 @@
           p.classList.add("log-err");
         } else {
           p.classList.add("log-out");
+        }
+
+        if (timestampsToggle.checked && timestamp) {
+          const timeSpan = document.createElement("span");
+          timeSpan.classList.add("log-timestamp");
+          timeSpan.textContent = formatTime(timestamp);
+          p.appendChild(timeSpan);
         }
 
         const badge = document.createElement("span");
@@ -283,11 +511,27 @@
           badge.textContent = "OUT";
         }
 
-        const textNode = document.createTextNode(" " + line);
+        const contentSpan = document.createElement("span");
+        contentSpan.classList.add("log-content");
+        contentSpan.textContent = line;
 
         p.appendChild(badge);
-        p.appendChild(textNode);
+        p.appendChild(contentSpan);
         logsDiv.appendChild(p);
+
+        lineCount++;
+        lineCountSpan.textContent = lineCount;
+
+        if (lineCount > MAX_LINES) {
+          const firstLine = logsDiv.firstChild;
+          if (firstLine) {
+            logsDiv.removeChild(firstLine);
+            lineCount--;
+            lineCountSpan.textContent = lineCount;
+          }
+        }
+
+        updateFilterInfo();
 
         if (autoScroll.checked) {
           logsDiv.scrollTop = logsDiv.scrollHeight;
@@ -297,8 +541,35 @@
       function appendMetaLine(text) {
         const p = document.createElement("div");
         p.classList.add("log-line", "log-meta");
-        p.textContent = `>>> ${text}`;
+
+        const badge = document.createElement("span");
+        badge.classList.add("badge");
+        badge.textContent = "SYS";
+        badge.style.background = "#1e40af";
+        badge.style.color = "#93c5fd";
+
+        const contentSpan = document.createElement("span");
+        contentSpan.classList.add("log-content");
+        contentSpan.textContent = text;
+
+        p.appendChild(badge);
+        p.appendChild(contentSpan);
         logsDiv.appendChild(p);
+
+        lineCount++;
+        lineCountSpan.textContent = lineCount;
+
+        if (lineCount > MAX_LINES) {
+          const firstLine = logsDiv.firstChild;
+          if (firstLine) {
+            logsDiv.removeChild(firstLine);
+            lineCount--;
+            lineCountSpan.textContent = lineCount;
+          }
+        }
+
+        updateFilterInfo();
+
         if (autoScroll.checked) {
           logsDiv.scrollTop = logsDiv.scrollHeight;
         }
@@ -331,16 +602,28 @@
         if (!processId) return;
 
         const proto = window.location.protocol === "https:" ? "wss" : "ws";
-        const wsUrl = `${proto}://${window.location.host}/ws?id=${processId}&key=${encodeURIComponent(
-          SECRET_KEY
-        )}`;
+        const params = new URLSearchParams({
+          id: processId,
+          key: SECRET_KEY,
+        });
 
+        if (isRestrictedMode) {
+          params.append("restrictedId", initialProcessId);
+        }
+
+        const wsUrl = `${proto}://${window.location.host}/ws?${params.toString()}`;
+
+        lineCount = 0;
+        lineCountSpan.textContent = "0";
         logsDiv.innerHTML = "";
-        appendMetaLine(`Connecting to process #${processId} ...`);
+
+        setConnectionStatus("connecting");
+        appendMetaLine(`Connecting to process #${processId}...`);
 
         ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
+          setConnectionStatus("connected");
           appendMetaLine("WebSocket connected.");
         };
 
@@ -351,7 +634,7 @@
           try {
             payload = JSON.parse(event.data);
           } catch (e) {
-            appendLogLine(event.data, "out");
+            appendLogLine(event.data, "out", Date.now());
             return;
           }
 
@@ -359,7 +642,7 @@
             const lines = payload.data.split("\n");
             for (const line of lines) {
               if (line.trim().length === 0) continue;
-              appendLogLine(line, payload.stream || "out");
+              appendLogLine(line, payload.stream || "out", payload.timestamp);
             }
           } else if (payload.type === "meta") {
             updateStats(payload);
@@ -374,10 +657,22 @@
         };
 
         ws.onclose = () => {
+          setConnectionStatus("disconnected");
           appendMetaLine("WebSocket disconnected.");
+          
+          if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+            reconnectAttempts++;
+            const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 30000);
+            appendMetaLine(`Auto-reconnecting in ${Math.round(delay / 1000)}s (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
+            reconnectTimeout = setTimeout(() => {
+              connectWebSocket(processId);
+            }, delay);
+          } else {
+            appendMetaLine("Max reconnection attempts reached. Please refresh the page.");
+          }
         };
 
-        ws.onerror = () => {
+        ws.onerror = (err) => {
           appendMetaLine("WebSocket error.");
         };
       }
@@ -386,9 +681,12 @@
         if (!SECRET_KEY) return;
 
         try {
-          const res = await fetch(`/api/processes?key=${encodeURIComponent(
-            SECRET_KEY
-          )}`);
+          const params = new URLSearchParams({ key: SECRET_KEY });
+          if (isRestrictedMode) {
+            params.append("restrictedId", initialProcessId);
+          }
+
+          const res = await fetch(`/api/processes?${params.toString()}`);
           const data = await res.json();
           if (!data.success) throw new Error("API error");
 
@@ -408,9 +706,6 @@
             return;
           }
 
-          // Decide which process to connect to first:
-          // 1) If /logs/:id or ?id= is present and exists, use that
-          // 2) Otherwise use first in list
           let targetId = null;
 
           if (initialProcessId) {
@@ -435,21 +730,117 @@
         }
       }
 
-      // ---- Events ----
       processSelect.addEventListener("change", () => {
         currentProcessId = processSelect.value;
+        if (reconnectTimeout) {
+          clearTimeout(reconnectTimeout);
+          reconnectTimeout = null;
+        }
+        reconnectAttempts = 0;
         connectWebSocket(currentProcessId);
       });
 
       clearBtn.addEventListener("click", () => {
         logsDiv.innerHTML = "";
+        lineCount = 0;
+        lineCountSpan.textContent = "0";
+        filterInfo.textContent = "";
       });
 
-      // Filter + errorsOnly are applied only to new incoming lines
-      filterInput.addEventListener("input", () => {});
-      errorsOnly.addEventListener("change", () => {});
+      copyBtn.addEventListener("click", () => {
+        const text = Array.from(logsDiv.children)
+          .filter((el) => !el.classList.contains("hidden"))
+          .map((line) => line.textContent)
+          .join("\n");
+        navigator.clipboard.writeText(text).then(() => {
+          const originalText = copyBtn.textContent;
+          copyBtn.textContent = "Copied!";
+          setTimeout(() => {
+            copyBtn.textContent = originalText;
+          }, 2000);
+        });
+      });
 
-      // ---- Init ----
+      downloadBtn.addEventListener("click", () => {
+        if (!currentProcessId) return;
+        const params = new URLSearchParams({ key: SECRET_KEY });
+        window.location.href = `/api/logs/export/${currentProcessId}?${params.toString()}`;
+      });
+
+      resetFilterBtn.addEventListener("click", () => {
+        filterInput.value = "";
+        errorsOnly.checked = false;
+        warningsOnly.checked = false;
+        successOnly.checked = false;
+        reapplyFilters();
+      });
+
+      filterInput.addEventListener("input", () => {
+        reapplyFilters();
+      });
+
+      errorsOnly.addEventListener("change", () => {
+        warningsOnly.checked = false;
+        successOnly.checked = false;
+        reapplyFilters();
+      });
+
+      warningsOnly.addEventListener("change", () => {
+        errorsOnly.checked = false;
+        successOnly.checked = false;
+        reapplyFilters();
+      });
+
+      successOnly.addEventListener("change", () => {
+        errorsOnly.checked = false;
+        warningsOnly.checked = false;
+        reapplyFilters();
+      });
+
+      document.addEventListener("keydown", (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === "l") {
+          e.preventDefault();
+          logsDiv.innerHTML = "";
+          lineCount = 0;
+          lineCountSpan.textContent = "0";
+          filterInfo.textContent = "";
+        }
+        if ((e.ctrlKey || e.metaKey) && e.key === "k") {
+          e.preventDefault();
+          errorsOnly.checked = !errorsOnly.checked;
+          warningsOnly.checked = false;
+          successOnly.checked = false;
+          reapplyFilters();
+        }
+        if ((e.ctrlKey || e.metaKey) && e.key === "j") {
+          e.preventDefault();
+          warningsOnly.checked = !warningsOnly.checked;
+          errorsOnly.checked = false;
+          successOnly.checked = false;
+          reapplyFilters();
+        }
+        if ((e.ctrlKey || e.metaKey) && e.key === "h") {
+          e.preventDefault();
+          successOnly.checked = !successOnly.checked;
+          errorsOnly.checked = false;
+          warningsOnly.checked = false;
+          reapplyFilters();
+        }
+        if ((e.ctrlKey || e.metaKey) && e.key === "r") {
+          e.preventDefault();
+          filterInput.value = "";
+          errorsOnly.checked = false;
+          warningsOnly.checked = false;
+          successOnly.checked = false;
+          reapplyFilters();
+        }
+      });
+
+      if (initialProcessId) {
+        processSelect.disabled = true;
+        processSelect.title = "Restricted to this process only";
+      }
+
       loadProcesses();
     </script>
   </body>
