@@ -289,13 +289,8 @@ wss.on("connection", (ws, req) => {
 
     tailOut.on("error", (err) => {
       console.error(`Tail error for ${logInfo.out}:`, err.message);
-      ws.send(
-        JSON.stringify({
-          type: "error",
-          message: `Failed to read log file: ${err.message}`,
-        })
-      );
-      ws.close();
+      // Don't close WebSocket on tail file errors - just log them
+      // The connection can continue if the file appears later
     });
 
     tailOut.stdout.on("data", (data) => {
@@ -332,12 +327,12 @@ wss.on("connection", (ws, req) => {
       }
     });
 
-    tailOut.on("exit", (code) => {
-      if (code !== 0) {
-        console.error(`Tail process exited with code ${code} for ${logInfo.out}`);
-        try {
-          ws.close(1011, `Tail process failed with code ${code}`);
-        } catch (_) {}
+    tailOut.on("exit", (code, signal) => {
+      // Only log if it's an actual error code (not killed by signal)
+      if (typeof code === "number" && code > 0) {
+        console.error(`Stdout tail exited with code ${code} for ${logInfo.out}`);
+      } else if (signal) {
+        console.log(`Stdout tail killed by signal ${signal}`);
       }
     });
 
@@ -348,6 +343,8 @@ wss.on("connection", (ws, req) => {
 
       tailErr.on("error", (err) => {
         console.error(`Tail error for ${logInfo.err}:`, err.message);
+        // Don't close WebSocket on tail file errors - just log them
+        // The connection can continue if the file appears later
       });
 
       tailErr.stdout.on("data", (data) => {
@@ -384,12 +381,12 @@ wss.on("connection", (ws, req) => {
         }
       });
 
-      tailErr.on("exit", (code) => {
-        if (code !== 0) {
-          console.error(`Tail process exited with code ${code} for ${logInfo.err}`);
-          try {
-            ws.close(1011, `Tail process failed with code ${code}`);
-          } catch (_) {}
+      tailErr.on("exit", (code, signal) => {
+        // Only log if it's an actual error code (not killed by signal)
+        if (typeof code === "number" && code > 0) {
+          console.error(`Stderr tail exited with code ${code} for ${logInfo.err}`);
+        } else if (signal) {
+          console.log(`Stderr tail killed by signal ${signal}`);
         }
       });
     }
