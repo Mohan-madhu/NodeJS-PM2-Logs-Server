@@ -641,14 +641,34 @@
         appendMetaLine(`Connecting to process #${processId}...`);
 
         ws = new WebSocket(wsUrl);
+        
+        // Track activity for client-side keepalive detection
+        let lastActivityTime = Date.now();
+        let clientHeartbeatTimeout = null;
 
         ws.onopen = () => {
           reconnectAttempts = 0; // Reset on successful connection
+          lastActivityTime = Date.now();
           setConnectionStatus("connected");
           appendMetaLine("WebSocket connected.");
+          
+          // Client-side keepalive: if no messages for 45 seconds, close and reconnect
+          // (server sends stats every 5 seconds + pings every 15 seconds)
+          if (clientHeartbeatTimeout) {
+            clearTimeout(clientHeartbeatTimeout);
+          }
+          clientHeartbeatTimeout = setInterval(() => {
+            const timeSinceLastActivity = Date.now() - lastActivityTime;
+            if (timeSinceLastActivity > 45000) {
+              appendMetaLine("No response from server. Reconnecting...");
+              ws.close();
+            }
+          }, 10000);
         };
 
         ws.onmessage = (event) => {
+          lastActivityTime = Date.now();
+          
           if (pausedCheckbox.checked) return;
 
           let payload;
@@ -678,6 +698,9 @@
         };
 
         ws.onclose = () => {
+          if (clientHeartbeatTimeout) {
+            clearTimeout(clientHeartbeatTimeout);
+          }
           setConnectionStatus("disconnected");
           appendMetaLine("WebSocket disconnected.");
           

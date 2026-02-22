@@ -414,6 +414,28 @@ wss.on("connection", (ws, req) => {
       }
     }, 5000);
 
+    // Heartbeat ping-pong to keep connection alive (especially through proxies)
+    let pongReceived = true;
+    const heartbeatInterval = setInterval(() => {
+      if (ws.readyState === 1) { // OPEN
+        if (!pongReceived) {
+          console.log(`No pong received for PM2 id=${id}. Terminating stale connection.`);
+          ws.terminate();
+          return;
+        }
+        pongReceived = false;
+        try {
+          ws.ping();
+        } catch (err) {
+          console.error("Error sending ping:", err.message);
+        }
+      }
+    }, 15000); // Send ping every 15 seconds (before most firewalls close at 30-120s)
+
+    ws.on("pong", () => {
+      pongReceived = true;
+    });
+
     ws.on("close", () => {
       console.log(`🔌 WebSocket closed for PM2 id=${id}`);
       try {
@@ -425,6 +447,7 @@ wss.on("connection", (ws, req) => {
         } catch (_) {}
       }
       clearInterval(statsInterval);
+      clearInterval(heartbeatInterval);
     });
 
     ws.on("error", (err) => {
