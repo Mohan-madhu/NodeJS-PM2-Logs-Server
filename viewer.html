@@ -774,6 +774,14 @@
 
           const processes = data.processes.sort((a, b) => a.id - b.id);
 
+          if (isRestrictedMode) {
+            const placeholder = document.createElement("option");
+            placeholder.value = "";
+            placeholder.textContent = "Select the process";
+            placeholder.selected = true;
+            processSelect.appendChild(placeholder);
+          }
+
           processes.forEach((p) => {
             const opt = document.createElement("option");
             opt.value = p.id;
@@ -801,6 +809,13 @@
             targetId = processes[0].id;
           }
 
+          if (isRestrictedMode) {
+            currentProcessId = null;
+            processSelect.value = "";
+            appendMetaLine("Select the process to start streaming logs.");
+            return;
+          }
+
           currentProcessId = targetId;
           processSelect.value = String(targetId);
           connectWebSocket(currentProcessId);
@@ -811,7 +826,31 @@
       }
 
       processSelect.addEventListener("change", () => {
-        currentProcessId = String(processSelect.value);
+        const selectedProcessId = String(processSelect.value || "");
+        if (!selectedProcessId) {
+          currentProcessId = null;
+          if (reconnectTimeout) {
+            clearTimeout(reconnectTimeout);
+            reconnectTimeout = null;
+          }
+          if (clientHeartbeatTimeout) {
+            clearInterval(clientHeartbeatTimeout);
+            clientHeartbeatTimeout = null;
+          }
+          if (ws) {
+            try {
+              ws.close();
+            } catch (e) {
+              // Ignore errors when closing
+            }
+            ws = null;
+          }
+          setConnectionStatus("disconnected");
+          appendMetaLine("Select the process to start streaming logs.");
+          return;
+        }
+
+        currentProcessId = selectedProcessId;
         // connectWebSocket handles all cleanup and connection management
         connectWebSocket(currentProcessId);
       });
